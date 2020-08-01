@@ -5,10 +5,13 @@ import random
 import giphy_client
 import tmdbsimple as tmdb
 import re
+import json
+import boto3
 
 from discord.ext import commands
 from dotenv import load_dotenv
 from giphy_client.rest import ApiException
+from botocore.exceptions import ClientError
 
 load_dotenv()
 
@@ -18,9 +21,92 @@ TMDB_KEY = os.getenv('TMDB_API_KEY')
 tmdb.API_KEY = TMDB_KEY
 
 giphy_api_instance = giphy_client.DefaultApi()
+session_movie = None
 
-selections = []
-selections_db = []
+# selections = []
+# selections_db = []
+
+def update_watch_movie(id, selected_movie, dynamodb=None):
+    if not dynamodb:
+        dynamodb = boto3.resource('dynamodb')
+
+    table = dynamodb.Table('discord-cinephile-db')
+    response = table.update_item(
+        Key={'id': id},
+        UpdateExpression="set selectedMovie = :sm",
+        ExpressionAttributeValues={
+            ':sm': selected_movie
+        },
+        ReturnValues="UPDATED_NEW"
+    )
+    return response
+
+def get_movie_list_dynamodb(id, dynamodb=None):
+    if not dynamodb:
+        dynamodb = boto3.resource('dynamodb')
+
+    table = dynamodb.Table('discord-cinephile-db')
+    try:
+        response = table.get_item(Key={'id': id})
+    except ClientError as e:
+        print(e.response['Error']['Message'])
+    else:
+        return response['Item']
+
+def add_movie_to_list_dynamodb(id, selected_movie, dynamodb=None):
+    if not dynamodb:
+        dynamodb = boto3.resource('dynamodb')
+    
+    table = dynamodb.Table('discord-cinephile-db')
+    response = table.update_item(
+        Key={'id': id},
+        UpdateExpression="set movieMenu = list_append(movieMenu, :wm)",
+        ExpressionAttributeValues={
+            ':wm': [selected_movie]
+        },
+        ReturnValues="UPDATED_NEW"
+    )
+    return response
+
+def update_movie_list_dynamodb(id, watched_movie, dynamodb=None):
+    
+    data = get_movie_list_dynamodb(id, )
+    watched_movie_index = data['movieMenu'].index(watched_movie)
+
+    if not dynamodb:
+        dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('discord-cinephile-db')
+    response = table.update_item(
+        Key={'id': id},
+        UpdateExpression="set watchedMovies = list_append(watchedMovies, :wm)",
+        ExpressionAttributeValues={
+            ':wm': [watched_movie]
+        },
+        ReturnValues="UPDATED_NEW"
+    )
+    response = table.update_item(
+        Key={'id': id},
+        UpdateExpression="remove movieMenu[" + str(watched_movie_index) + "]",
+        ReturnValues="UPDATED_NEW"
+    )
+    return response
+
+def replace_movie_list_dynamodb(id, prev_movie, new_movie, dynamodb=None):
+    data = get_movie_list_dynamodb(id, )
+    watched_movie_index = data['movieMenu'].index(prev_movie)
+
+    if not dynamodb:
+        dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('discord-cinephile-db')
+    response = table.update_item(
+        Key={'id': id},
+        UpdateExpression="set movieMenu[" + str(watched_movie_index) + "] = :nm",
+        ExpressionAttributeValues={
+            ':nm': new_movie
+        },
+        ReturnValues="UPDATED_NEW"
+    )
+    return response
 
 def create_movie_embed(arg, year):
     # call tmdb api
@@ -47,6 +133,7 @@ def create_movie_embed(arg, year):
     embedded_movie = discord.Embed(title=movie_selection[0]['title'], description=movie_selection[0]['overview'])
     tmdb_poster_url = "http://image.tmdb.org/t/p/w500" + movie_selection[0]['poster_path']
     embedded_movie.set_image(url=tmdb_poster_url)
+    print(json.dumps(embedded_movie.to_dict()))
     return embedded_movie
 
 class Movies(commands.Cog):
@@ -56,76 +143,92 @@ class Movies(commands.Cog):
     @commands.command()
     async def arise(self, ctx):
         await ctx.send("I have arisen.")
-        
+
     @commands.command()
-    async def select(self, ctx, movie_name, year : str = None, user : str = None):
+    async def admin_select(self, ctx, movie_name, year, user):
         author = str(ctx.author)
         roles = ctx.author.roles
         author = author.split('#')[0]
-        if (user != None):
-            is_head_sloth = False
-            for role in roles:
-                if role.name == 'Head Sloth':
-                    is_head_sloth = True
-                    break
-            if (not is_head_sloth):
-                try:
-                    api_response = giphy_api_instance.gifs_search_get(GIPHY_KEY, limit=1, rating='g', q='dikembe mutombo finger wag')
-                    embedded_gif = discord.Embed(description='Oops! Someone\'s being a bit naughty! This feature isn\'t for you!')
-                    embedded_gif.set_image(url=api_response.data[0].images.downsized_medium.url)
-                    await ctx.send(embed=embedded_gif)
-                except ApiException as e:
-                    print("Exception when calling DefaultAPI --> gifs_search_get: %s\n" % e)
+        dynamodb_data = get_movie_list_dynamodb(1, )
+        menu_list = dynamodb_data['movieMenu']
+        is_head_sloth = False
+        for role in roles:
+            if role.name == 'Head Sloth':
+                is_head_sloth = True
+                break
+        if (not is_head_sloth):
+            try:
+                api_response = giphy_api_instance.gifs_search_get(GIPHY_KEY, limit=1, rating='g', q='dikembe mutombo finger wag')
+                embedded_gif = discord.Embed(description='Oops! Someone\'s being a bit naughty! This feature isn\'t for you!')
+                embedded_gif.set_image(url=api_response.data[0].images.downsized_medium.url)
+                await ctx.send(embed=embedded_gif)
+            except ApiException as e:
+                print("Exception when calling DefaultAPI --> gifs_search_get: %s\n" % e)
+            return
+        else:
+            movie_embed = create_movie_embed(movie_name, year)
+            if (movie_embed == None or len(movie_embed) == 0):
+                await ctx.send('Hmm...not sure if that movie exists in the TMDB Database. Check your spelling of the title and make sure you\'re using quotes!')
                 return
-            else:
-                movie_embed = create_movie_embed(movie_name, year)
-                if (movie_embed == None or len(movie_embed) == 0):
-                    await ctx.send('Hmm...not sure if that movie exists in the TMDB Database. Check your spelling of the title and make sure you\'re using quotes!')
+            
+            for movie_data_entry in menu_list:
+                dict_movie_data_entry = json.loads(movie_data_entry)
+                if dict_movie_data_entry['user'] == user:
+                    new_selection = movie_embed.to_dict()
+                    new_selection['user'] = user
+                    replace_movie_list_dynamodb(1, movie_data_entry, json.dumps(new_selection), )
+                    await ctx.send(f'{author} changed their mind! They selected....{movie_embed.title} for {user}.')
+                    await ctx.send(embed=movie_embed)
                     return
 
-                for entry in selections:
-                    # user made a selection before, head sloth is overwriting
-                    if entry[0] == user:
-                        entry[1] = movie_embed
-                        await ctx.send(f'{author} changed their mind! They selected....{movie_embed.title}')
-                        await ctx.send(embed=movie_embed)
-                        return
-
-                # user didn't make a selection yet
-                selections.append([user, movie_embed, False])
-                selections_db.append([user, movie_embed.to_dict(), False])
-                print(selections_db)
-                await ctx.send(f'{author} has selected....{movie_embed.title} for {user}! Dictatorship!')
-                await ctx.send(embed=movie_embed)
-                return
+            # user didn't make a selection yet
+            movie_dict = movie_embed.to_dict()
+            # append user to dict
+            movie_dict['user'] = user
+            add_movie_to_list_dynamodb(1, json.dumps(movie_dict), )
+            await ctx.send(f'{author} has selected....{movie_embed.title} for {user}! Dictatorship!')
+            await ctx.send(embed=movie_embed)
+            return
         
+    @commands.command()
+    async def select(self, ctx, movie_name, year : str = None):
+        author = str(ctx.author)
+        roles = ctx.author.roles
+        author = author.split('#')[0]
+
+        dynamodb_data = get_movie_list_dynamodb(1, )
+        menu_list = dynamodb_data['movieMenu']
         # create movie embed object
         movie_embed = create_movie_embed(movie_name, year)
 
         if (movie_embed == None):
             await ctx.send('Hmm...not sure if that movie exists in the TMDB Database. Check your spelling of the title and make sure you\'re using quotes!')
-            return
+            return 
 
-        for entry in selections:
-            # user has made a selection before, overwriting
-            if entry[0] == author:
-                entry[1] = movie_embed
+        for movie_data_entry in menu_list:
+            dict_movie_data_entry = json.loads(movie_data_entry)
+            if dict_movie_data_entry['user'] == author:
+                new_selection = movie_embed.to_dict()
+                new_selection['user'] = author
+                replace_movie_list_dynamodb(1, movie_data_entry, json.dumps(new_selection), )
                 await ctx.send(f'{author} changed their mind! They selected....{movie_embed.title}')
                 await ctx.send(embed=movie_embed)
                 return
 
         # user has not made a selection, add new entry
-        selections.append([author, movie_embed, False])
-        selections_db.append([author, movie_embed.to_dict(), False])
+        movie_dict = movie_embed.to_dict()
+        # append user to dict
+        movie_dict['user'] = author
+        add_movie_to_list_dynamodb(1, json.dumps(movie_dict), )
         await ctx.send(f'{author} has selected....{movie_embed.title}')
         await ctx.send(embed=movie_embed)
-
-        print(selections_db)
         return
             
     @commands.command()
     async def get_menu(self, ctx):
-        if len(selections) == 0:
+        dynamodb_data = get_movie_list_dynamodb(1, )
+        menu_list = dynamodb_data['movieMenu']
+        if len(menu_list) == 0:
             try:
                 api_response = giphy_api_instance.gifs_search_get(GIPHY_KEY, limit=1, rating='g', q='boring')
                 embedded_gif = discord.Embed(description='Uh oh! Looks like your movie list is empty! How boring...')
@@ -136,13 +239,18 @@ class Movies(commands.Cog):
                 print("Exception when calling DefaultAPI --> gifs_search_get: %s\n" % e)
 
         await ctx.send("Here's the menu!")
-        for selection in selections:
-            if (not selection[2]):
-                await ctx.send(embed=selection[1])
+        for entry in menu_list:
+            movie_data = json.loads(entry)
+            movie_embed_obj = discord.Embed(title=movie_data["title"], description=movie_data["description"])
+            movie_embed_obj.set_image(url=movie_data["image"]["url"])
+            await ctx.send(embed=movie_embed_obj)
     
     @commands.command()
     async def random_choice(self, ctx):
-        if len(selections) == 0:
+        dynamodb_data = get_movie_list_dynamodb(1, )
+        menu_list = dynamodb_data['movieMenu']
+
+        if len(menu_list) == 0:
             try:
                 api_response = giphy_api_instance.gifs_search_get(GIPHY_KEY, limit=1, rating='g', q='picard facepalm')
                 embedded_gif = discord.Embed(description='How tf am I supposed to randomly pick if your list is empty?')
@@ -151,43 +259,47 @@ class Movies(commands.Cog):
                 return
             except ApiException as e:
                 print("Exception when calling DefaultAPI --> gifs_search_get: %s\n" % e)
-        # watched = all_watched(selections)
-        # if watched:
-        #     await ctx.send('Time for new selections folks! Use !clear to clear selections.')
-        random_choice = random.choice(selections)
-        while (random_choice[2]):
-            random_choice = random.choice(selections)
+        random_choice = random.choice(menu_list)
+        random_choice = json.loads(random_choice)
+        random_choice_embed = discord.Embed(title=random_choice["title"], description=random_choice["description"])
+        random_choice_embed.set_image(url=random_choice["image"]["url"])
+
+        update_watch_movie(1, json.dumps(random_choice), )
 
         await ctx.send(f'Grab your popcorn folks...we\'re watching:')
-        await ctx.send(embed=random_choice[1])
-        global session_movie
-        session_movie = random_choice[1]
-        print(session_movie)
+        await ctx.send(embed=random_choice_embed)
         return
 
     @commands.command()
     async def clear(self, ctx):
-        roles = ctx.author.roles
-        is_head_sloth = False
-        for role in roles:
-            if role.name == 'Head Sloth':
-                is_head_sloth = True
-                break
+        # roles = ctx.author.roles
+        # is_head_sloth = False
+        # for role in roles:
+        #     if role.name == 'Head Sloth':
+        #         is_head_sloth = True
+        #         break
 
-        if is_head_sloth and len(selections) != 0 and len(selections_db) != 0:
-            selections.clear()
-            selections_db.clear()
-            await ctx.send("I cleared our session data! Can't wait for the next session!")
-        elif not is_head_sloth:
-            try:
-                api_response = giphy_api_instance.gifs_search_get(GIPHY_KEY, limit=1, rating='g', q='dikembe mutombo finger wag')
-                embedded_gif = discord.Embed(description='Oops! Someone\'s being a bit naughty! This feature isn\'t for you!')
-                embedded_gif.set_image(url=api_response.data[0].images.downsized_medium.url)
-                await ctx.send(embed=embedded_gif)
-            except ApiException as e:
-                print("Exception when calling DefaultAPI --> gifs_search_get: %s\n" % e)
-        else:
-            await ctx.send("Current session is already empty...")
+        # if is_head_sloth and len(selections) != 0 and len(selections_db) != 0:
+        #     selections.clear()
+        #     selections_db.clear()
+        #     await ctx.send("I cleared our session data! Can't wait for the next session!")
+        # elif not is_head_sloth:
+        #     try:
+        #         api_response = giphy_api_instance.gifs_search_get(GIPHY_KEY, limit=1, rating='g', q='dikembe mutombo finger wag')
+        #         embedded_gif = discord.Embed(description='Oops! Someone\'s being a bit naughty! This feature isn\'t for you!')
+        #         embedded_gif.set_image(url=api_response.data[0].images.downsized_medium.url)
+        #         await ctx.send(embed=embedded_gif)
+        #     except ApiException as e:
+        #         print("Exception when calling DefaultAPI --> gifs_search_get: %s\n" % e)
+        # else:
+        #     await ctx.send("Current session is already empty...")
+        return
+
+    @commands.command()
+    async def next(self, ctx):
+        movie_string = json.dumps(session_movies)
+        update_movie_list_dynamodb(1, movie_string, )
+
 
 
 def setup(bot):
