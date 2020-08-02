@@ -23,9 +23,6 @@ tmdb.API_KEY = TMDB_KEY
 giphy_api_instance = giphy_client.DefaultApi()
 session_movie = None
 
-# selections = []
-# selections_db = []
-
 def update_watch_movie(id, selected_movie, dynamodb=None):
     if not dynamodb:
         dynamodb = boto3.resource('dynamodb')
@@ -68,9 +65,10 @@ def add_movie_to_list_dynamodb(id, selected_movie, dynamodb=None):
     )
     return response
 
-def update_movie_list_dynamodb(id, watched_movie, dynamodb=None):
+def update_movie_list_to_watched_dynamodb(id, watched_movie, dynamodb=None):
     
     data = get_movie_list_dynamodb(id, )
+    # watched_movie = data['selectedMovie']
     watched_movie_index = data['movieMenu'].index(watched_movie)
 
     if not dynamodb:
@@ -89,6 +87,8 @@ def update_movie_list_dynamodb(id, watched_movie, dynamodb=None):
         UpdateExpression="remove movieMenu[" + str(watched_movie_index) + "]",
         ReturnValues="UPDATED_NEW"
     )
+
+    
     return response
 
 def replace_movie_list_dynamodb(id, prev_movie, new_movie, dynamodb=None):
@@ -271,34 +271,32 @@ class Movies(commands.Cog):
         return
 
     @commands.command()
-    async def clear(self, ctx):
-        # roles = ctx.author.roles
-        # is_head_sloth = False
-        # for role in roles:
-        #     if role.name == 'Head Sloth':
-        #         is_head_sloth = True
-        #         break
+    async def finish(self, ctx):
+        # get data here, if movieMenu is empty, tell channel to pick new movies
+        dynamodb_data = get_movie_list_dynamodb(1, )
+        
+        
+        selected_movie = dynamodb_data["selectedMovie"]
+        if (selected_movie == "None"):
+            await ctx.send("Looks like you haven't randomly selected something to watch yet. Do that first, will ya?")
+            return
 
-        # if is_head_sloth and len(selections) != 0 and len(selections_db) != 0:
-        #     selections.clear()
-        #     selections_db.clear()
-        #     await ctx.send("I cleared our session data! Can't wait for the next session!")
-        # elif not is_head_sloth:
-        #     try:
-        #         api_response = giphy_api_instance.gifs_search_get(GIPHY_KEY, limit=1, rating='g', q='dikembe mutombo finger wag')
-        #         embedded_gif = discord.Embed(description='Oops! Someone\'s being a bit naughty! This feature isn\'t for you!')
-        #         embedded_gif.set_image(url=api_response.data[0].images.downsized_medium.url)
-        #         await ctx.send(embed=embedded_gif)
-        #     except ApiException as e:
-        #         print("Exception when calling DefaultAPI --> gifs_search_get: %s\n" % e)
-        # else:
-        #     await ctx.send("Current session is already empty...")
-        return
+        # call method to move watched movie to watchedMovies list, remove it from menu
+        update_movie_list_to_watched_dynamodb(1, selected_movie, )
+        dict_selected_movie = json.loads(selected_movie)
+        watched_movie_embed = discord.Embed(title=dict_selected_movie["title"], description=dict_selected_movie["description"])
+        watched_movie_embed.set_image(url=dict_selected_movie["image"]["url"])
+        await ctx.send("What did y'all think of the movie? Rate it by reacting to the following message, out of 10!")
+        await ctx.send(embed=watched_movie_embed)
 
-    @commands.command()
-    async def next(self, ctx):
-        movie_string = json.dumps(session_movies)
-        update_movie_list_dynamodb(1, movie_string, )
+        # reset watch movie
+        update_watch_movie(1, "None", )
+
+        dynamodb_data_2 = get_movie_list_dynamodb(1, )
+        movie_menu = dynamodb_data_2["movieMenu"]
+
+        if (len(movie_menu) == 0):
+            await ctx.send("It's time for some new movies! Pick 'em and get these showings on the road!")
 
 
 
