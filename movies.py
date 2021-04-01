@@ -7,6 +7,7 @@ import tmdbsimple as tmdb
 import re
 import json
 import boto3
+import DiscordUtils
 
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -297,6 +298,22 @@ class Movies(commands.Cog):
         if (len(movie_menu) == 0):
             await ctx.send("It's time for some new movies! Pick 'em and get these showings on the road!")
 
+    @commands.command()
+    async def watched_list(self, ctx):
+        movie_watched_list = get_movie_watched_list()
+        embeds = []
+        paginator = DiscordUtils.Pagination.CustomEmbedPaginator(ctx)
+        paginator.add_reaction('⏮️', "first")
+        paginator.add_reaction('⏪', "back")
+        paginator.add_reaction('🔐', "lock")
+        paginator.add_reaction('⏩', "next")
+        paginator.add_reaction('⏭️', "last")
+        for entry in movie_watched_list:
+            movie_embed_obj = discord.Embed(title=entry["title"], description=entry["description"])
+            movie_embed_obj.set_image(url=entry["image"]["url"])
+            embeds.append(movie_embed_obj)
+        await paginator.run(embeds)    
+        return
 
 
 def setup(bot):
