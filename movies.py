@@ -20,7 +20,13 @@ from mongodb_util import update_user_selection
 from mongodb_util import add_movie_to_watched_list
 from mongodb_util import get_movie_watched_list
 from mongodb_util import get_current_selected_movie
-
+from mongodb_util import get_threesome_watched_list
+from mongodb_util import add_movie_threesome_menu
+from mongodb_util import add_movie_to_threesome_watched_list
+from mongodb_util import delete_threesome_menu_movies
+from mongodb_util import get_threesome_menu
+from mongodb_util import update_current_movie_threesome
+from mongodb_util import get_current_selected_movie_threesome
 load_dotenv()
 
 GIPHY_KEY = os.getenv('GIPHY_API_KEY')
@@ -30,91 +36,6 @@ tmdb.API_KEY = TMDB_KEY
 
 giphy_api_instance = giphy_client.DefaultApi()
 session_movie = None
-
-def update_watch_movie(id, selected_movie, dynamodb=None):
-    if not dynamodb:
-        dynamodb = boto3.resource('dynamodb')
-
-    table = dynamodb.Table('discord-cinephile-db')
-    response = table.update_item(
-        Key={'id': id},
-        UpdateExpression="set selectedMovie = :sm",
-        ExpressionAttributeValues={
-            ':sm': selected_movie
-        },
-        ReturnValues="UPDATED_NEW"
-    )
-    return response
-
-def get_movie_list_dynamodb(id, dynamodb=None):
-    if not dynamodb:
-        dynamodb = boto3.resource('dynamodb')
-
-    table = dynamodb.Table('discord-cinephile-db')
-    try:
-        response = table.get_item(Key={'id': id})
-    except ClientError as e:
-        print(e.response['Error']['Message'])
-    else:
-        return response['Item']
-
-def add_movie_to_list_dynamodb(id, selected_movie, dynamodb=None):
-    if not dynamodb:
-        dynamodb = boto3.resource('dynamodb')
-    
-    table = dynamodb.Table('discord-cinephile-db')
-    response = table.update_item(
-        Key={'id': id},
-        UpdateExpression="set movieMenu = list_append(movieMenu, :wm)",
-        ExpressionAttributeValues={
-            ':wm': [selected_movie]
-        },
-        ReturnValues="UPDATED_NEW"
-    )
-    return response
-
-def update_movie_list_to_watched_dynamodb(id, watched_movie, dynamodb=None):
-    
-    data = get_movie_list_dynamodb(id, )
-    # watched_movie = data['selectedMovie']
-    watched_movie_index = data['movieMenu'].index(watched_movie)
-
-    if not dynamodb:
-        dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table('discord-cinephile-db')
-    response = table.update_item(
-        Key={'id': id},
-        UpdateExpression="set watchedMovies = list_append(watchedMovies, :wm)",
-        ExpressionAttributeValues={
-            ':wm': [watched_movie]
-        },
-        ReturnValues="UPDATED_NEW"
-    )
-    response = table.update_item(
-        Key={'id': id},
-        UpdateExpression="remove movieMenu[" + str(watched_movie_index) + "]",
-        ReturnValues="UPDATED_NEW"
-    )
-
-    
-    return response
-
-def replace_movie_list_dynamodb(id, prev_movie, new_movie, dynamodb=None):
-    data = get_movie_list_dynamodb(id, )
-    watched_movie_index = data['movieMenu'].index(prev_movie)
-
-    if not dynamodb:
-        dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table('discord-cinephile-db')
-    response = table.update_item(
-        Key={'id': id},
-        UpdateExpression="set movieMenu[" + str(watched_movie_index) + "] = :nm",
-        ExpressionAttributeValues={
-            ':nm': new_movie
-        },
-        ReturnValues="UPDATED_NEW"
-    )
-    return response
 
 def create_movie_embed(arg, year):
     # call tmdb api
@@ -145,15 +66,17 @@ def create_movie_embed(arg, year):
     return embedded_movie
 
 class Movies(commands.Cog):
-    def __init__(self, bot):
+    def __init__(self, bot, threesome):
         self.bot = bot
-
-    @commands.command()
-    async def arise(self, ctx):
-        await ctx.send("I have arisen.")
+        self.threesome = False
 
     @commands.command()
     async def admin_select(self, ctx, movie_name, year, user):
+
+        if self.threesome:
+            await ctx.send(f'Threesome in progress. Ssssshhhh!')
+            return
+
         author = str(ctx.author)
         roles = ctx.author.roles
         author = author.split('#')[0]
@@ -183,7 +106,7 @@ class Movies(commands.Cog):
                 if movie_data_entry['user'] == user:
                     new_selection = movie_embed.to_dict()
                     new_selection['user'] = user
-                    update_user_selection(user, new_selection)
+                    update_user_selection(user, new_selection, self.threesome)
                     await ctx.send(f'{author} changed {user}\'s mind! They selected....{movie_embed.title} for {user}.')
                     await ctx.send(embed=movie_embed)
                     return
@@ -199,6 +122,11 @@ class Movies(commands.Cog):
         
     @commands.command()
     async def select(self, ctx, movie_name, year : str = None):
+
+        if self.threesome:
+            await ctx.send(f'Threesome in progress. Ssssshhhh!')
+            return
+
         author = str(ctx.author)
         roles = ctx.author.roles
         author = author.split('#')[0]
@@ -215,7 +143,7 @@ class Movies(commands.Cog):
             if movie_data_entry['user'] == author:
                 new_selection = movie_embed.to_dict()
                 new_selection['user'] = author
-                update_user_selection(author, new_selection)
+                update_user_selection(author, new_selection, self.threesome)
                 await ctx.send(f'{author} changed their mind! They selected....{movie_embed.title}')
                 await ctx.send(embed=movie_embed)
                 return
@@ -231,6 +159,11 @@ class Movies(commands.Cog):
             
     @commands.command()
     async def get_menu(self, ctx):
+
+        if self.threesome:
+            await ctx.send(f'Threesome in progress. Ssssshhhh!')
+            return
+
         menu_list = get_movie_menu()
         if len(menu_list) == 0:
             try:
@@ -250,6 +183,10 @@ class Movies(commands.Cog):
     
     @commands.command()
     async def random_choice(self, ctx):
+        if self.threesome:
+            await ctx.send(f'Threesome in progress. Ssssshhhh!')
+            return
+
         # mongodb call
         menu_list = get_movie_menu()
 
@@ -275,6 +212,11 @@ class Movies(commands.Cog):
 
     @commands.command()
     async def finish(self, ctx):
+
+        if self.threesome:
+            await ctx.send(f'Threesome in progress. Ssssshhhh!')
+            return
+
         # get data here, if movieMenu is empty, tell channel to pick new movies
         selected_movie = get_current_selected_movie()
 
@@ -305,7 +247,7 @@ class Movies(commands.Cog):
         paginator = DiscordUtils.Pagination.CustomEmbedPaginator(ctx)
         paginator.add_reaction('⏮️', "first")
         paginator.add_reaction('⏪', "back")
-        paginator.add_reaction('🔐', "lock")
+        #paginator.add_reaction('🔐', "lock")
         paginator.add_reaction('⏩', "next")
         paginator.add_reaction('⏭️', "last")
         for entry in movie_watched_list:
@@ -315,6 +257,111 @@ class Movies(commands.Cog):
         await paginator.run(embeds)    
         return
 
+    @commands.command()
+    async def start_threesome(self, ctx):
+        if self.threesome:
+            await ctx.send("Threesome in progress. Ssssshhhh!")
+            return
+        
+        self.threesome = True
+        await ctx.send("Threesome started! Ooh austyn u so sec see")
+        return
+    
+    @commands.command()
+    async def select_threesome(self, ctx, movie_name, year : str = None):
+        if not self.threesome:
+            await ctx.send(f'Threesome not started!')
+            return
+        
+        author = str(ctx.author)
+        roles = ctx.author.roles
+        author = author.split('#')[0]
 
+        menu_list = get_threesome_menu()
+        movie_embed = create_movie_embed(movie_name, year)
+
+        if (movie_embed == None):
+            await ctx.send('Hmm...not sure if that movie exists in the TMDB Database. Check your spelling of the title and make sure you\'re using quotes!')
+            return 
+
+        for movie_data_entry in menu_list:
+            if movie_data_entry['user'] == author:
+                new_selection = movie_embed.to_dict()
+                new_selection['user'] = author
+                update_user_selection(author, new_selection)
+                await ctx.send(f'{author} changed their mind! They selected....{movie_embed.title}')
+                await ctx.send(embed=movie_embed)
+                return
+        
+        # user has not made a selection, add new entry
+        movie_dict = movie_embed.to_dict()
+        # append user to dict
+        movie_dict['user'] = author
+        add_movie_threesome_menu(author, movie_dict)
+        await ctx.send(f'{author} has selected....{movie_embed.title} for the threesome.')
+        await ctx.send(embed=movie_embed)
+        return
+
+    @commands.command()
+    async def random_choice_threesome(self, ctx):
+        if not self.threesome:
+            await ctx.send(f'Threesome not started yet!')
+            return
+        
+        menu_list = get_threesome_menu()
+        if len(menu_list) == 0:
+            await ctx.send("The threesome movie menu is empty, pick some movies!!")
+            return
+        random_choice = random.choice(menu_list)
+        random_choice_embed = discord.Embed(title=random_choice["title"], description=random_choice["description"])
+        random_choice_embed.set_image(url=random_choice["image"]["url"])
+
+         # mongodb call
+        update_current_movie_threesome(random_choice)
+
+        await ctx.send(f'Grab your popcorn folks...we\'re watching:')
+        await ctx.send(embed=random_choice_embed)
+        return
+
+    @commands.command()
+    async def finish_threesome(self, ctx):
+        if not self.threesome:
+            await ctx.send("Threesome not started yet!")
+            return
+
+        curr_threesome_movie = get_current_selected_movie_threesome()
+
+        add_movie_to_threesome_watched_list(curr_threesome_movie)
+
+        self.threesome = False
+
+        await ctx.send("Threesome completed. ")
+
+        watched_movie_embed = discord.Embed(title=curr_threesome_movie["title"], description=curr_threesome_movie["description"])
+        watched_movie_embed.set_image(url=curr_threesome_movie["image"]["url"])
+        await ctx.send("What did y'all think of the movie? Rate it by reacting to the following message, out of 10!")
+        await ctx.send(embed=watched_movie_embed)
+
+    @commands.command()
+    async def watched_list_threesome(self, ctx):
+        
+        movie_watched_list = get_threesome_watched_list()
+        if len(movie_watched_list) == 0:
+            await ctx.send("No movies in threesome watched list!")
+            return
+        embeds = []
+        paginator = DiscordUtils.Pagination.CustomEmbedPaginator(ctx)
+        paginator.add_reaction('⏮️', "first")
+        paginator.add_reaction('⏪', "back")
+        #paginator.add_reaction('🔐', "lock")
+        paginator.add_reaction('⏩', "next")
+        paginator.add_reaction('⏭️', "last")
+        print(movie_watched_list)
+        for entry in movie_watched_list:
+            movie_embed_obj = discord.Embed(title=entry["title"], description=entry["description"])
+            movie_embed_obj.set_image(url=entry["image"]["url"])
+            embeds.append(movie_embed_obj)
+        await paginator.run(embeds)    
+        return
 def setup(bot):
-    bot.add_cog(Movies(bot))
+    bot.add_cog(Movies(bot, False))
