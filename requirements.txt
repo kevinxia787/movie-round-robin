@@ -23,7 +23,7 @@ s3transfer==0.3.3
 six==1.15.0
 tabulate==0.8.7
 tmdbsimple==2.5.5
-urllib3==1.25.9
+urllib3==1.26.5
 websockets==8.1
 yarl==1.4.2
 youtube-dl==2021.4.1
